@@ -163,6 +163,11 @@ button:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3p
     <button data-rate="0.9">Vừa</button>
     <button data-rate="1.1">Nhanh</button>
   </div>
+  <div class="speed" id="modeRow" role="group" aria-label="Chế độ nói">
+    <span class="speed-label">Chế độ nói</span>
+    <button data-mode="one">Từng câu</button>
+    <button data-mode="long">Nói dài</button>
+  </div>
 
   <div class="notice" id="notice" hidden>
     <div><b id="noticeTitle"></b><span id="noticeFix"></span></div>
@@ -449,10 +454,10 @@ function waitVoices() {
     try { speechSynthesis.addEventListener("voiceschanged", () => { clearTimeout(t); loadVoices(); res(); }, { once: true }); } catch { res(); }
   });
 }
-async function speak(text, lang) {
+async function speak(text, lang, queue) {
   if (!("speechSynthesis" in window)) { showVoiceMissing(lang); return; }
   try {
-    speechSynthesis.cancel();
+    if (!queue) speechSynthesis.cancel();
     loadVoices();
     await waitVoices();
     const u = new SpeechSynthesisUtterance(text);
@@ -460,6 +465,7 @@ async function speak(text, lang) {
     const v = pickVoice(lang.code);
     if (v) u.voice = v; else if (voices.length) showVoiceMissing(lang);
     u.rate = rate;
+    u.onend = () => { quietUntil = Date.now() + 600; };
     speechSynthesis.speak(u);
   } catch { showVoiceMissing(lang); }
 }
@@ -529,13 +535,15 @@ function startListening(src) {
   }
 }
 function stopListening() {
+  longOn = false;
   try { recog && recog.abort(); } catch {}
   recog = null;
   document.querySelectorAll(".listening").forEach(b => b.classList.remove("listening"));
 }
 
 async function press(who) {
-  if (busy) return;
+  if (longOn) { const same = side === who; stopLong(); if (same) return; }
+  if (busy && !longMode) return;
   if (recog && side === who) { try { recog.stop(); } catch {} return; }
   stopListening();
   // Chưa có quyền micro: hỏi quyền trước khi nghe
@@ -545,7 +553,7 @@ async function press(who) {
     if (mic === "granted") { $("micCard").hidden = true; micBlocked = false; }
     else if (mic === "denied") micBlocked = true;
   }
-  openComposer(who);
+  if (longMode && SR && !micBlocked) startLong(who); else openComposer(who);
   if (mic === "denied") showError("micDenied");
 }
 $("meBtn").onclick = () => press("me");
@@ -642,7 +650,7 @@ async function doTranslate() {
 
 // Dịch một lượt. Khi bật "Tự nhận tiếng": tiếng Việt → dịch sang tiếng của khách,
 // tiếng khác → dịch sang tiếng Việt và tự đổi ô chọn sang tiếng vừa nhận ra.
-async function runTranslation(turn, who) {
+async function runTranslation(turn, who, long) {
   busy = true; $("translateBtn").disabled = true;
   clearError();
   try {
@@ -667,8 +675,8 @@ async function runTranslation(turn, who) {
     const to = turn.side === "me" ? other : VI;
     render();
     if (switched) showInfo("Đã tự nhận ra: " + switched.vi + ".", " Khi bạn nói, app sẽ dịch sang " + switched.vi + ".");
-    if (autoSpeak) speak(turn.dst, to);
-    if (turn.side === "me" && !turn.img) openShow(turn.dst, to);
+    if (autoSpeak) speak(turn.dst, to, long);
+    if (turn.side === "me" && !turn.img && !long) openShow(turn.dst, to);
     return true;
   } catch {
     showError(navigator.onLine ? "translate" : "offline");
@@ -816,6 +824,87 @@ for (const b of $("speed").querySelectorAll("button")) {
   };
 }
 renderSpeed();
+
+// ---------- Chế độ nói dài: nghe liên tục, dịch từng câu ----------
+let longMode = store.get("pd-long", "0") === "1";
+let longOn = false;
+let longQueue = Promise.resolve();
+let quietUntil = 0; // bỏ qua tiếng máy đang đọc to, để không tự dịch lại bản dịch
+function renderMode() {
+  for (const b of $("modeRow").querySelectorAll("button")) b.setAttribute("aria-pressed", String((b.dataset.mode === "long") === longMode));
+}
+for (const b of $("modeRow").querySelectorAll("button")) {
+  b.onclick = () => {
+    if (longOn) stopLong();
+    longMode = b.dataset.mode === "long";
+    store.set("pd-long", longMode ? "1" : "0");
+    renderMode();
+  };
+}
+function startLong(who) {
+  side = who;
+  longOn = true;
+  clearError();
+  const src = who === "me" ? VI : other;
+  const c = $("composer");
+  c.hidden = false;
+  c.className = "composer " + who;
+  $("composerWho").textContent = who === "me" ? "Tôi nói dài · Tiếng Việt" : "Khách nói dài · " + other.name;
+  $("input").value = "";
+  $("input").lang = src.code;
+  $("composerHint").textContent = "Đang nghe liên tục. Nói xong mỗi câu, app tự dịch." + (autoSpeak ? " Chờ app đọc xong rồi nói tiếp." : "") + " Bấm lại nút nói để dừng.";
+  (who === "me" ? $("meBtn") : $("guestBtn")).classList.add("listening");
+  listenLong(src);
+}
+function listenLong(src) {
+  if (!longOn) return;
+  try {
+    recog = new SR();
+    recog.lang = src.code;
+    recog.continuous = true;
+    recog.interimResults = true;
+    recog.onresult = (e) => {
+      let interim = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i];
+        if (r.isFinal) {
+          const text = r[0].transcript.trim();
+          const reading = window.speechSynthesis && speechSynthesis.speaking;
+          if (text && !reading && Date.now() > quietUntil) queueLong(text);
+        } else interim += r[0].transcript;
+      }
+      $("input").value = interim.trim();
+    };
+    recog.onerror = (e) => {
+      if (e.error === "not-allowed" || e.error === "service-not-allowed") { micBlocked = true; stopLong(); showError("micDenied"); }
+      else if (e.error === "audio-capture") { micBlocked = true; stopLong(); showError("micNone"); }
+      else if (e.error === "network") { stopLong(); showError("offline"); }
+      else if (e.error === "language-not-supported") { stopLong(); showError("micNoLang"); }
+      // "no-speech" và "aborted": để onend tự nghe lại
+    };
+    recog.onend = () => { recog = null; if (longOn) setTimeout(() => listenLong(src), 250); };
+    recog.start();
+  } catch {
+    stopLong();
+    showError("micOther");
+  }
+}
+function stopLong() {
+  longOn = false;
+  try { recog && recog.stop(); } catch {}
+  recog = null;
+  document.querySelectorAll(".listening").forEach(b => b.classList.remove("listening"));
+  $("composer").hidden = true;
+}
+// Dịch lần lượt từng câu theo đúng thứ tự đã nói
+function queueLong(text) {
+  const who = side;
+  const turn = startTurn({ side: who, lang: other, src: text, dst: "" });
+  longQueue = longQueue.then(async () => {
+    if (!(await runTranslation(turn, who, true))) { turn.status = "Chưa dịch được."; render(); }
+  });
+}
+renderMode();
 
 // ---------- Xin quyền micro ----------
 const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
