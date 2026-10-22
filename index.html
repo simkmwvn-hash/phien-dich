@@ -146,7 +146,6 @@ button:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3p
   <header>
     <div class="brand">Phiên Dịch<small>Máy phiên dịch bằng giọng nói</small></div>
     <div class="head-btns">
-      <button class="icon-btn" id="autoDetect" aria-pressed="true">Tự nhận tiếng: Bật</button>
       <button class="icon-btn" id="autoSpeak" aria-pressed="true">Đọc to: Bật</button>
     </div>
   </header>
@@ -301,6 +300,7 @@ const ERR = {
   ocrLoad:      ["Không tải được bộ đọc chữ.", " Kiểm tra mạng (Wi‑Fi/4G) rồi bấm “Dịch chữ trong ảnh” lại."],
   ocrEmpty:     ["Không tìm thấy chữ trong ảnh.", " Chụp gần hơn, đủ sáng, giữ máy thẳng rồi thử lại."],
   ocrFail:      ["Đọc ảnh bị lỗi.", " Thử chụp lại hoặc chọn ảnh khác."],
+  ocrUnclear:   ["Chữ trong ảnh không rõ nên chưa dịch được.", " Chụp gần, thẳng, đủ sáng, chỉ lấy phần có chữ. Nếu biết chữ là tiếng gì, chọn tiếng đó ở ô chọn tiếng rồi chụp lại."],
 };
 function showError(key) {
   const [t, f] = ERR[key] || ERR.translate;
@@ -319,6 +319,9 @@ $("noticeClose").onclick = clearError;
 // ---------- Ngôn ngữ ----------
 function fillLangs() {
   const sel = $("otherLang");
+  const auto = document.createElement("option");
+  auto.value = "auto"; auto.textContent = "Tự phát hiện";
+  sel.append(auto);
   const groups = [["Hay dùng", LANGS.filter(l => !l.more)], ["Các tiếng khác", LANGS.filter(l => l.more)]];
   for (const [label, list] of groups) {
     const g = document.createElement("optgroup");
@@ -330,7 +333,7 @@ function fillLangs() {
     }
     sel.append(g);
   }
-  sel.value = other.code;
+  sel.value = autoDetect ? "auto" : other.code;
 }
 let swapped = store.get("pd-swap", "0") === "1";
 function applyLang() {
@@ -339,22 +342,24 @@ function applyLang() {
   $("talk").classList.toggle("swapped", swapped);
   const L = swapped ? other.vi : "Tiếng Việt", R = swapped ? "Tiếng Việt" : other.vi;
   $("langHint").textContent = "Nút trái: " + L + " → " + R + ". Nút phải: " + R + " → " + L + ". Bấm ⇄ để đổi chiều.";
+  if (autoDetect) $("langHint").textContent = "Tự phát hiện: app tự nhận tiếng khi gõ chữ hoặc chụp ảnh. Khi nói, nút xanh nghe theo " + other.vi + " (tiếng nhận ra gần nhất).";
+  renderDetect();
   $("meTarget").textContent = other.vi.replace("Tiếng ", "");
   $("guestLabel").textContent = other.speak || other.name;
   $("guestSrc").textContent = other.name;
 }
 $("otherLang").onchange = (e) => {
-  other = LANGS.find(l => l.code === e.target.value) || LANGS[0];
-  store.set("pd-lang2", other.code);
+  autoDetect = e.target.value === "auto";
+  store.set("pd-detect", autoDetect ? "1" : "0");
+  if (!autoDetect) {
+    other = LANGS.find(l => l.code === e.target.value) || LANGS[0];
+    store.set("pd-lang2", other.code);
+  }
   applyLang();
 };
 $("swapBtn").onclick = () => { swapped = !swapped; store.set("pd-swap", swapped ? "1" : "0"); applyLang(); };
 let autoDetect = store.get("pd-detect", "1") === "1";
-function renderDetect() {
-  $("autoDetect").setAttribute("aria-pressed", String(autoDetect));
-  $("autoDetect").textContent = "Tự nhận tiếng: " + (autoDetect ? "Bật" : "Tắt");
-}
-$("autoDetect").onclick = () => { autoDetect = !autoDetect; store.set("pd-detect", autoDetect ? "1" : "0"); renderDetect(); };
+function renderDetect() { $("otherLang").value = autoDetect ? "auto" : other.code; }
 $("autoSpeak").onclick = () => { autoSpeak = !autoSpeak; store.set("pd-auto", autoSpeak ? "1" : "0"); renderAuto(); };
 function renderAuto() {
   $("autoSpeak").setAttribute("aria-pressed", String(autoSpeak));
@@ -607,7 +612,6 @@ function langByCode(tr) {
 function setOther(l) {
   other = l;
   store.set("pd-lang2", l.code);
-  $("otherLang").value = l.code;
   applyLang();
 }
 function showInfo(title, fix) {
@@ -662,7 +666,7 @@ async function runTranslation(turn, who) {
     }
     const to = turn.side === "me" ? other : VI;
     render();
-    if (switched) showInfo("Đã tự nhận ra: " + switched.vi + ".", " Ô chọn tiếng đã đổi sang " + switched.vi + ".");
+    if (switched) showInfo("Đã tự nhận ra: " + switched.vi + ".", " Khi bạn nói, app sẽ dịch sang " + switched.vi + ".");
     if (autoSpeak) speak(turn.dst, to);
     if (turn.side === "me" && !turn.img) openShow(turn.dst, to);
     return true;
@@ -692,6 +696,38 @@ function updateStatus(turn) {
   const el = $("log").querySelectorAll(".turn .dst")[turns.indexOf(turn)];
   if (el && !turn.dst) el.textContent = turn.status;
 }
+// Làm rõ ảnh trước khi đọc: đưa về cỡ vừa, chuyển trắng đen, tăng tương phản
+async function prepareImage(file) {
+  const bmp = await createImageBitmap(file);
+  const long = Math.max(bmp.width, bmp.height);
+  const scale = long > 1800 ? 1800 / long : long < 1000 ? 1000 / long : 1;
+  const c = document.createElement("canvas");
+  c.width = Math.round(bmp.width * scale);
+  c.height = Math.round(bmp.height * scale);
+  const g = c.getContext("2d");
+  g.drawImage(bmp, 0, 0, c.width, c.height);
+  const img = g.getImageData(0, 0, c.width, c.height), d = img.data;
+  let min = 255, max = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    const y = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+    d[i] = y;
+    if (y < min) min = y;
+    if (y > max) max = y;
+  }
+  const span = Math.max(1, max - min);
+  for (let i = 0; i < d.length; i += 4) d[i] = d[i + 1] = d[i + 2] = (d[i] - min) * 255 / span;
+  g.putImageData(img, 0, 0);
+  return c;
+}
+// Chỉ giữ các dòng đọc chắc chắn; điểm càng cao nghĩa là đọc càng rõ
+function scoreText(data) {
+  const lines = (data.lines || [])
+    .map(l => ({ t: l.text.trim().replace(/([぀-鿿가-힯])\s+(?=[぀-鿿가-힯])/g, "$1"), c: l.confidence }))
+    .filter(l => l.c >= 60 && /[\p{L}\p{N}]{2,}/u.test(l.t.replace(/\s/g, "")));
+  const len = lines.reduce((s, l) => s + l.t.length, 0);
+  const score = lines.reduce((s, l) => s + l.c * l.t.length, 0);
+  return { text: lines.map(l => l.t).join("\n"), score, avg: len ? score / len : 0, raw: !!(data.text || "").trim() };
+}
 $("photoBtn").onclick = () => { if (!busy) $("photoInput").click(); };
 $("photoInput").onchange = async (e) => {
   const file = e.target.files && e.target.files[0];
@@ -701,22 +737,36 @@ $("photoInput").onchange = async (e) => {
   stopListening();
   $("composer").hidden = true;
   clearError();
-  const turn = startTurn({ side: "guest", lang: other, src: "", dst: "", img: URL.createObjectURL(file), status: "Đang tải bộ đọc chữ…" });
+  const turn = startTurn({ side: "guest", lang: other, src: "", dst: "", img: URL.createObjectURL(file), status: "Đang làm rõ ảnh…" });
   busy = true;
-  let text = "";
+  let best = null;
   try {
+    const canvas = await prepareImage(file);
+    turn.status = "Đang tải bộ đọc chữ (lần đầu hơi lâu)…";
+    updateStatus(turn);
     await loadTesseract();
-    const langs = [...new Set([OCR[other.tr] || "eng", "eng", "vie"])];
-    const worker = await Tesseract.createWorker(langs, 1, {
+    // Tự phát hiện: thử chữ Latin, Trung, Nhật, Hàn và tiếng đang chọn; chọn kết quả rõ nhất
+    const mine = OCR[other.tr] || "eng";
+    const sets = autoDetect ? [["eng", "vie"], ["chi_sim"], ["jpn"], ["kor"], [mine]] : [[mine, "vie"]];
+    const seen = new Set(), uniq = [];
+    for (const s of sets) { const u = [...new Set(s)], k = u.join("+"); if (!seen.has(k)) { seen.add(k); uniq.push(u); } }
+    let step = 0;
+    const worker = await Tesseract.createWorker(uniq[0], 1, {
       logger: (m) => {
-        if (m.status === "recognizing text") turn.status = "Đang đọc chữ trong ảnh… " + Math.round(m.progress * 100) + "%";
+        if (m.status === "recognizing text") turn.status = "Đang đọc chữ trong ảnh… " + Math.round((step + m.progress) / uniq.length * 100) + "%";
         else if (/load/.test(m.status)) turn.status = "Đang tải bộ đọc chữ (lần đầu hơi lâu)…";
         updateStatus(turn);
       },
     });
-    const { data } = await worker.recognize(file);
+    for (let i = 0; i < uniq.length; i++) {
+      step = i;
+      if (i > 0) await worker.reinitialize(uniq[i]);
+      const { data } = await worker.recognize(canvas);
+      const r = scoreText(data);
+      if (!best || r.score > best.score) best = r;
+      if (best.avg >= 88 && best.text.length >= 4) break;
+    }
     await worker.terminate();
-    text = (data.text || "").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
   } catch (err) {
     busy = false;
     turns.splice(turns.indexOf(turn), 1);
@@ -725,8 +775,13 @@ $("photoInput").onchange = async (e) => {
     return;
   }
   busy = false;
-  if (!text) { turns.splice(turns.indexOf(turn), 1); render(); showError("ocrEmpty"); return; }
-  turn.src = text;
+  if (!best || best.text.length < 2) {
+    turns.splice(turns.indexOf(turn), 1);
+    render();
+    showError(best && best.raw ? "ocrUnclear" : "ocrEmpty");
+    return;
+  }
+  turn.src = best.text;
   turn.status = "Đang dịch…";
   render();
   if (!(await runTranslation(turn, "guest"))) { turn.status = "Chưa dịch được."; render(); }
