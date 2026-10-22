@@ -1,0 +1,14 @@
+{
+  "name": "Phiên Dịch",
+  "short_name": "Phiên Dịch",
+  "description": "Máy phiên dịch bằng giọng nói giữa tiếng Việt và các thứ tiếng",
+  "lang": "vi",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#EAF0EF",
+  "theme_color": "#C2302A",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
