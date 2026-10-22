@@ -70,6 +70,10 @@ select#otherLang {
 .notice b { display: block; }
 .notice button { margin-left: auto; background: none; border: 0; color: inherit; font: inherit; font-weight: 700; cursor: pointer; padding: 0 4px; }
 
+.mic-card { background: var(--surface); border: 2px solid var(--guest); border-radius: 14px; padding: 12px; display: flex; gap: 12px; align-items: center; font-size: 0.9rem; line-height: 1.4; }
+.mic-card b { display: block; }
+.mic-card .btn { flex: 0 0 auto; }
+
 .log { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-bottom: 4px; }
 .turn { border-radius: 16px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px; max-width: 92%; }
 .turn.me { align-self: flex-end; background: var(--vi-soft); }
@@ -144,6 +148,11 @@ button:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3p
   <div class="notice" id="notice" hidden>
     <div><b id="noticeTitle"></b><span id="noticeFix"></span></div>
     <button id="noticeClose" aria-label="Đóng thông báo">✕</button>
+  </div>
+
+  <div class="mic-card" id="micCard" hidden>
+    <div><b>Cho phép dùng micro</b><span id="micText">App cần micro để nghe bạn và khách nói.</span></div>
+    <button class="btn primary" id="micAllow">Cho phép micro</button>
   </div>
 
   <div class="log" id="log" aria-live="polite"></div>
@@ -483,11 +492,19 @@ function stopListening() {
   document.querySelectorAll(".listening").forEach(b => b.classList.remove("listening"));
 }
 
-function press(who) {
+async function press(who) {
   if (busy) return;
   if (recog && side === who) { try { recog.stop(); } catch {} return; }
   stopListening();
+  // Chưa có quyền micro: hỏi quyền trước khi nghe
+  let mic = null;
+  if (SR && !$("micCard").hidden) {
+    mic = await requestMic();
+    if (mic === "granted") { $("micCard").hidden = true; micBlocked = false; }
+    else if (mic === "denied") micBlocked = true;
+  }
   openComposer(who);
+  if (mic === "denied") showError("micDenied");
 }
 $("meBtn").onclick = () => press("me");
 $("guestBtn").onclick = () => press("guest");
@@ -552,6 +569,46 @@ async function doTranslate() {
 
 window.addEventListener("offline", () => showError("offline"));
 window.addEventListener("online", clearError);
+
+// ---------- Xin quyền micro ----------
+const isIOS = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+function micDeniedHelp() {
+  return isIOS
+    ? " Vào Cài đặt › Safari › Micro › chọn Cho phép, rồi mở lại app."
+    : " Bấm biểu tượng ổ khoá (hoặc ⋮ › Thông tin trang) cạnh địa chỉ web › Quyền › bật Micro, rồi tải lại trang.";
+}
+ERR.micDenied[1] = micDeniedHelp();
+async function micState() {
+  try { return (await navigator.permissions.query({ name: "microphone" })).state; } catch { return "unknown"; }
+}
+async function requestMic() {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return "unsupported";
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({ audio: true });
+    s.getTracks().forEach(t => t.stop());
+    return "granted";
+  } catch (e) {
+    return e && (e.name === "NotAllowedError" || e.name === "SecurityError") ? "denied" : "error";
+  }
+}
+function showMicDenied() {
+  $("micCard").hidden = false;
+  $("micText").textContent = "Micro đang bị chặn." + micDeniedHelp();
+  $("micAllow").textContent = "Thử lại";
+}
+async function refreshMicCard() {
+  const st = await micState();
+  if (st === "granted") { $("micCard").hidden = true; micBlocked = false; }
+  else if (st === "denied") showMicDenied();
+  else $("micCard").hidden = false;
+}
+$("micAllow").onclick = async () => {
+  const r = await requestMic();
+  if (r === "granted") { $("micCard").hidden = true; micBlocked = false; clearError(); }
+  else if (r === "denied") showMicDenied();
+  else showError("micNone");
+};
+refreshMicCard();
 
 // Câu ví dụ (tự xoá khi dịch câu đầu tiên)
 turns.push(
