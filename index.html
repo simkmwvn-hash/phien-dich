@@ -75,6 +75,11 @@ select#otherLang {
 .speed button { border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 999px; padding: 6px 12px; font: inherit; cursor: pointer; }
 .speed button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
 
+.head-btns { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.photo-btn { display: flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); border-radius: 16px; padding: 12px; font: inherit; font-weight: 600; cursor: pointer; }
+.photo-btn svg { width: 22px; height: 22px; }
+.turn img { max-width: 100%; max-height: 160px; border-radius: 10px; object-fit: cover; align-self: flex-start; }
+
 .mic-card { background: var(--surface); border: 2px solid var(--guest); border-radius: 14px; padding: 12px; display: flex; gap: 12px; align-items: center; font-size: 0.9rem; line-height: 1.4; }
 .mic-card b { display: block; }
 .mic-card .btn { flex: 0 0 auto; }
@@ -140,7 +145,10 @@ button:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3p
 <div class="app">
   <header>
     <div class="brand">Phiên Dịch<small>Máy phiên dịch bằng giọng nói</small></div>
-    <button class="icon-btn" id="autoSpeak" aria-pressed="true">Đọc to: Bật</button>
+    <div class="head-btns">
+      <button class="icon-btn" id="autoDetect" aria-pressed="true">Tự nhận tiếng: Bật</button>
+      <button class="icon-btn" id="autoSpeak" aria-pressed="true">Đọc to: Bật</button>
+    </div>
   </header>
 
   <div class="langbar">
@@ -189,6 +197,11 @@ button:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3p
       <span class="big" id="guestLabel">Speak</span><span class="small"><span id="guestSrc">English</span> → Tiếng Việt</span>
     </button>
   </div>
+  <button class="photo-btn" id="photoBtn">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>
+    <span>Dịch chữ trong ảnh</span>
+  </button>
+  <input type="file" id="photoInput" accept="image/*" hidden>
 </div>
 
 <div class="show" id="show" hidden>
@@ -285,6 +298,9 @@ const ERR = {
   micNoSpeech:  ["Không nghe thấy tiếng nói.", " Nói to, gần điện thoại hơn rồi bấm nút nói lại."],
   micNoLang:    ["Máy chưa nghe được thứ tiếng này.", " Bấm micro trên bàn phím để nói, hoặc gõ chữ."],
   micOther:     ["Micro gặp lỗi.", " Bấm nút nói lại, hoặc dùng micro trên bàn phím."],
+  ocrLoad:      ["Không tải được bộ đọc chữ.", " Kiểm tra mạng (Wi‑Fi/4G) rồi bấm “Dịch chữ trong ảnh” lại."],
+  ocrEmpty:     ["Không tìm thấy chữ trong ảnh.", " Chụp gần hơn, đủ sáng, giữ máy thẳng rồi thử lại."],
+  ocrFail:      ["Đọc ảnh bị lỗi.", " Thử chụp lại hoặc chọn ảnh khác."],
 };
 function showError(key) {
   const [t, f] = ERR[key] || ERR.translate;
@@ -333,6 +349,12 @@ $("otherLang").onchange = (e) => {
   applyLang();
 };
 $("swapBtn").onclick = () => { swapped = !swapped; store.set("pd-swap", swapped ? "1" : "0"); applyLang(); };
+let autoDetect = store.get("pd-detect", "1") === "1";
+function renderDetect() {
+  $("autoDetect").setAttribute("aria-pressed", String(autoDetect));
+  $("autoDetect").textContent = "Tự nhận tiếng: " + (autoDetect ? "Bật" : "Tắt");
+}
+$("autoDetect").onclick = () => { autoDetect = !autoDetect; store.set("pd-detect", autoDetect ? "1" : "0"); renderDetect(); };
 $("autoSpeak").onclick = () => { autoSpeak = !autoSpeak; store.set("pd-auto", autoSpeak ? "1" : "0"); renderAuto(); };
 function renderAuto() {
   $("autoSpeak").setAttribute("aria-pressed", String(autoSpeak));
@@ -358,8 +380,11 @@ function render() {
     meta.textContent = t.side === "me" ? "Tôi · Tiếng Việt" : "Khách · " + t.lang.vi;
     if (t.example) { const c = document.createElement("span"); c.className = "chip"; c.textContent = "Ví dụ"; meta.append(c); }
     const src = document.createElement("div"); src.className = "src"; src.textContent = t.src;
-    const dst = document.createElement("div"); dst.className = "dst"; dst.textContent = t.dst || "Đang dịch…";
-    card.append(meta, src, dst);
+    const dst = document.createElement("div"); dst.className = "dst"; dst.textContent = t.dst || t.status || "Đang dịch…";
+    card.append(meta);
+    if (t.img) { const im = document.createElement("img"); im.src = t.img; im.alt = "Ảnh cần dịch"; card.append(im); }
+    if (t.src) card.append(src);
+    card.append(dst);
     if (t.dst) {
       const target = t.side === "me" ? t.lang : VI;
       dst.lang = target.code;
@@ -524,7 +549,7 @@ $("cancelBtn").onclick = () => { stopListening(); $("composer").hidden = true; s
 $("translateBtn").onclick = () => { stopListening(); doTranslate(); };
 
 // ---------- Dịch (dịch vụ miễn phí, có dự phòng) ----------
-async function translateGoogle(text, from, to) {
+async function gtx(text, from, to) {
   const url = "https://translate.googleapis.com/translate_a/single?client=gtx&dt=t&sl=" +
     encodeURIComponent(from) + "&tl=" + encodeURIComponent(to) + "&q=" + encodeURIComponent(text);
   const r = await fetch(url);
@@ -532,7 +557,30 @@ async function translateGoogle(text, from, to) {
   const data = await r.json();
   const out = (data[0] || []).map(p => p[0]).join("").trim();
   if (!out) throw new Error("google empty");
-  return out;
+  return { out, detected: typeof data[2] === "string" ? data[2] : from };
+}
+// Chia văn bản dài (vd. chữ trong ảnh) thành nhiều đoạn ngắn để dịch
+function chunks(text, max = 1200) {
+  const parts = [];
+  let cur = "";
+  for (const line of text.split("\n")) {
+    let l = line;
+    while (l.length > max) { if (cur) { parts.push(cur); cur = ""; } parts.push(l.slice(0, max)); l = l.slice(max); }
+    if (cur && (cur + "\n" + l).length > max) { parts.push(cur); cur = l; }
+    else cur = cur ? cur + "\n" + l : l;
+  }
+  if (cur) parts.push(cur);
+  return parts;
+}
+async function translateGoogle(text, from, to) {
+  const outs = [];
+  let detected = from;
+  for (const part of chunks(text)) {
+    const r = await gtx(part, from, to);
+    outs.push(r.out);
+    if (detected === "auto") detected = r.detected;
+  }
+  return { out: outs.join("\n"), detected };
 }
 async function translateMyMemory(text, from, to) {
   const url = "https://api.mymemory.translated.net/get?q=" + encodeURIComponent(text) +
@@ -542,42 +590,147 @@ async function translateMyMemory(text, from, to) {
   const data = await r.json();
   const out = data && data.responseData && data.responseData.translatedText;
   if (!out || data.responseStatus !== 200) throw new Error("mymemory bad");
-  return out.trim();
+  return { out: out.trim(), detected: from };
 }
-async function translate(text, from, to) {
+// from = "auto" để tự nhận tiếng; hint = tiếng đoán trước, dùng khi phải chuyển sang dịch vụ dự phòng
+async function translate(text, from, to, hint) {
   try { return await translateGoogle(text, from, to); }
-  catch { return await translateMyMemory(text, from, to); }
+  catch { return await translateMyMemory(text.slice(0, 500), from === "auto" ? hint : from, to); }
+}
+
+function langByCode(tr) {
+  if (!tr) return null;
+  if (other.tr === tr) return other;
+  const base = tr.split("-")[0];
+  return LANGS.find(l => l.tr === tr) || LANGS.find(l => l.tr.split("-")[0] === base) || null;
+}
+function setOther(l) {
+  other = l;
+  store.set("pd-lang2", l.code);
+  $("otherLang").value = l.code;
+  applyLang();
+}
+function showInfo(title, fix) {
+  $("noticeTitle").textContent = title;
+  $("noticeFix").textContent = fix;
+  $("notice").hidden = false;
+}
+function startTurn(t) {
+  for (let i = turns.length - 1; i >= 0; i--) if (turns[i].example) turns.splice(i, 1);
+  turns.push(t);
+  render();
+  return t;
 }
 
 async function doTranslate() {
   const text = $("input").value.trim();
   if (!text) { showError("empty"); return; }
   if (!navigator.onLine) { showError("offline"); return; }
-  const who = side;
-  const from = who === "me" ? VI : other;
-  const to = who === "me" ? other : VI;
-  const turn = { side: who, lang: other, src: text, dst: "" };
-  for (let i = turns.length - 1; i >= 0; i--) if (turns[i].example) turns.splice(i, 1);
-  turns.push(turn);
+  const turn = startTurn({ side, lang: other, src: text, dst: "" });
   $("composer").hidden = true;
-  busy = true; $("translateBtn").disabled = true;
-  clearError();
-  render();
-  try {
-    turn.dst = await translate(text, from.tr, to.tr);
-    render();
-    if (autoSpeak) speak(turn.dst, to);
-    if (who === "me") openShow(turn.dst, to);
-  } catch {
+  if (!(await runTranslation(turn, side))) {
     turns.splice(turns.indexOf(turn), 1);
     $("input").value = text;
     $("composer").hidden = false;
     render();
+  }
+}
+
+// Dịch một lượt. Khi bật "Tự nhận tiếng": tiếng Việt → dịch sang tiếng của khách,
+// tiếng khác → dịch sang tiếng Việt và tự đổi ô chọn sang tiếng vừa nhận ra.
+async function runTranslation(turn, who) {
+  busy = true; $("translateBtn").disabled = true;
+  clearError();
+  try {
+    let switched = null;
+    if (autoDetect) {
+      let res = await translate(turn.src, "auto", "vi", who === "me" ? "vi" : other.tr);
+      if ((res.detected || "").split("-")[0] === "vi") {
+        turn.side = "me";
+        res = await translate(turn.src, "vi", other.tr);
+      } else {
+        turn.side = "guest";
+        const found = langByCode(res.detected);
+        if (found && found !== other) { setOther(found); switched = found; }
+      }
+      turn.lang = other;
+      turn.dst = res.out;
+    } else {
+      turn.side = who;
+      const from = who === "me" ? VI : other;
+      turn.dst = (await translate(turn.src, from.tr, (who === "me" ? other : VI).tr)).out;
+    }
+    const to = turn.side === "me" ? other : VI;
+    render();
+    if (switched) showInfo("Đã tự nhận ra: " + switched.vi + ".", " Ô chọn tiếng đã đổi sang " + switched.vi + ".");
+    if (autoSpeak) speak(turn.dst, to);
+    if (turn.side === "me" && !turn.img) openShow(turn.dst, to);
+    return true;
+  } catch {
     showError(navigator.onLine ? "translate" : "offline");
+    return false;
   } finally {
     busy = false; $("translateBtn").disabled = false;
   }
 }
+
+// ---------- Dịch chữ trong ảnh (đọc chữ ngay trên máy, miễn phí) ----------
+const OCR = { en: "eng", "zh-CN": "chi_sim", "zh-TW": "chi_tra", yue: "chi_tra", ja: "jpn", ko: "kor", th: "tha", lo: "lao", km: "khm", fr: "fra", de: "deu", es: "spa", ru: "rus", it: "ita", pt: "por", id: "ind", ms: "msa", tl: "tgl", hi: "hin", ar: "ara", my: "mya", bn: "ben", ur: "urd", ta: "tam", te: "tel", pa: "pan", si: "sin", ne: "nep", mn: "mon", kk: "kaz", uz: "uzb", tr: "tur", fa: "fas", iw: "heb", az: "aze", ka: "kat", hy: "hye", nl: "nld", pl: "pol", uk: "ukr", cs: "ces", sk: "slk", hu: "hun", ro: "ron", bg: "bul", sr: "srp", hr: "hrv", el: "ell", sv: "swe", no: "nor", da: "dan", fi: "fin", sw: "swa" };
+let tessLoading = null;
+function loadTesseract() {
+  if (window.Tesseract) return Promise.resolve();
+  if (!tessLoading) tessLoading = new Promise((ok, bad) => {
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js";
+    s.onload = ok;
+    s.onerror = () => { tessLoading = null; bad(new Error("load")); };
+    document.head.append(s);
+  });
+  return tessLoading;
+}
+function updateStatus(turn) {
+  const el = $("log").querySelectorAll(".turn .dst")[turns.indexOf(turn)];
+  if (el && !turn.dst) el.textContent = turn.status;
+}
+$("photoBtn").onclick = () => { if (!busy) $("photoInput").click(); };
+$("photoInput").onchange = async (e) => {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = "";
+  if (!file) return;
+  if (!navigator.onLine) { showError("offline"); return; }
+  stopListening();
+  $("composer").hidden = true;
+  clearError();
+  const turn = startTurn({ side: "guest", lang: other, src: "", dst: "", img: URL.createObjectURL(file), status: "Đang tải bộ đọc chữ…" });
+  busy = true;
+  let text = "";
+  try {
+    await loadTesseract();
+    const langs = [...new Set([OCR[other.tr] || "eng", "eng", "vie"])];
+    const worker = await Tesseract.createWorker(langs, 1, {
+      logger: (m) => {
+        if (m.status === "recognizing text") turn.status = "Đang đọc chữ trong ảnh… " + Math.round(m.progress * 100) + "%";
+        else if (/load/.test(m.status)) turn.status = "Đang tải bộ đọc chữ (lần đầu hơi lâu)…";
+        updateStatus(turn);
+      },
+    });
+    const { data } = await worker.recognize(file);
+    await worker.terminate();
+    text = (data.text || "").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  } catch (err) {
+    busy = false;
+    turns.splice(turns.indexOf(turn), 1);
+    render();
+    showError(err && err.message === "load" ? "ocrLoad" : "ocrFail");
+    return;
+  }
+  busy = false;
+  if (!text) { turns.splice(turns.indexOf(turn), 1); render(); showError("ocrEmpty"); return; }
+  turn.src = text;
+  turn.status = "Đang dịch…";
+  render();
+  if (!(await runTranslation(turn, "guest"))) { turn.status = "Chưa dịch được."; render(); }
+};
 
 window.addEventListener("offline", () => showError("offline"));
 window.addEventListener("online", clearError);
@@ -644,7 +797,7 @@ turns.push(
   { side: "me", lang: LANGS[0], src: "Xin chào, cho tôi hỏi nhà ga ở đâu?", dst: "Hello, could you tell me where the train station is?", example: true },
   { side: "guest", lang: LANGS[0], src: "Go straight two blocks, then turn left.", dst: "Đi thẳng hai dãy nhà, rồi rẽ trái.", example: true },
 );
-fillLangs(); applyLang(); renderAuto(); render();
+fillLangs(); applyLang(); renderAuto(); renderDetect(); render();
 </script>
 </body>
 </html>
