@@ -54,7 +54,9 @@ header { display: flex; align-items: center; gap: 8px; }
   background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 8px;
 }
 .lang-fixed { font-weight: 600; color: var(--vi); text-align: center; padding: 10px 4px; }
-.swap-label { color: var(--muted); font-size: 1.2rem; }
+.slot { min-width: 0; }
+.swap-btn { border: 1px solid var(--line); background: var(--bg); color: var(--ink); border-radius: 999px; width: 44px; height: 44px; font: inherit; font-size: 1.3rem; cursor: pointer; }
+.talk.swapped .guest-btn { order: -1; }
 .lang-hint { font-size: 0.8rem; color: var(--muted); text-align: center; line-height: 1.4; margin-top: -4px; }
 select#otherLang {
   width: 100%; font: inherit; font-weight: 600; color: var(--guest); background: var(--guest-soft);
@@ -133,11 +135,11 @@ button:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3p
   </header>
 
   <div class="langbar">
-    <div class="lang-fixed">Tiếng Việt</div>
-    <div class="swap-label" aria-hidden="true">⇄</div>
-    <select id="otherLang" aria-label="Ngôn ngữ của khách"></select>
+    <div class="slot" id="slotL"><div class="lang-fixed" id="viLabel">Tiếng Việt</div></div>
+    <button class="swap-btn" id="swapBtn" aria-label="Đổi chiều dịch" title="Đổi chiều dịch">⇄</button>
+    <div class="slot" id="slotR"><select id="otherLang" aria-label="Ngôn ngữ của khách"></select></div>
   </div>
-  <div class="lang-hint">Chọn tiếng của khách ở ô bên phải. Nút đỏ: tiếng Việt → tiếng đó. Nút xanh: tiếng đó → tiếng Việt.</div>
+  <div class="lang-hint" id="langHint"></div>
 
   <div class="notice" id="notice" hidden>
     <div><b id="noticeTitle"></b><span id="noticeFix"></span></div>
@@ -156,7 +158,7 @@ button:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3p
     </div>
   </div>
 
-  <div class="talk">
+  <div class="talk" id="talk">
     <button class="me-btn" id="meBtn">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
       <span class="big">Tôi nói</span><span class="small">Tiếng Việt → <span id="meTarget">Anh</span></span>
@@ -292,7 +294,13 @@ function fillLangs() {
   }
   sel.value = other.code;
 }
+let swapped = store.get("pd-swap", "0") === "1";
 function applyLang() {
+  $(swapped ? "slotR" : "slotL").append($("viLabel"));
+  $(swapped ? "slotL" : "slotR").append($("otherLang"));
+  $("talk").classList.toggle("swapped", swapped);
+  const L = swapped ? other.vi : "Tiếng Việt", R = swapped ? "Tiếng Việt" : other.vi;
+  $("langHint").textContent = "Nút trái: " + L + " → " + R + ". Nút phải: " + R + " → " + L + ". Bấm ⇄ để đổi chiều.";
   $("meTarget").textContent = other.vi.replace("Tiếng ", "");
   $("guestLabel").textContent = other.speak || other.name;
   $("guestSrc").textContent = other.name;
@@ -302,6 +310,7 @@ $("otherLang").onchange = (e) => {
   store.set("pd-lang", other.code);
   applyLang();
 };
+$("swapBtn").onclick = () => { swapped = !swapped; store.set("pd-swap", swapped ? "1" : "0"); applyLang(); };
 $("autoSpeak").onclick = () => { autoSpeak = !autoSpeak; store.set("pd-auto", autoSpeak ? "1" : "0"); renderAuto(); };
 function renderAuto() {
   $("autoSpeak").setAttribute("aria-pressed", String(autoSpeak));
