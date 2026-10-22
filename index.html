@@ -719,14 +719,23 @@ async function prepareImage(file) {
   g.putImageData(img, 0, 0);
   return c;
 }
-// Chỉ giữ các dòng đọc chắc chắn; điểm càng cao nghĩa là đọc càng rõ
-function scoreText(data) {
-  const lines = (data.lines || [])
-    .map(l => ({ t: l.text.trim().replace(/([぀-鿿가-힯])\s+(?=[぀-鿿가-힯])/g, "$1"), c: l.confidence }))
+// Lấy các dòng đọc chắc chắn (bỏ dòng nhiễu)
+function goodLines(data) {
+  return (data.lines || [])
+    .map(l => ({ t: l.text.trim().replace(/([぀-鿿가-힯])\s+(?=[぀-鿿가-힯])/g, "$1"), c: l.confidence, b: l.bbox }))
     .filter(l => l.c >= 60 && /[\p{L}\p{N}]{2,}/u.test(l.t.replace(/\s/g, "")));
-  const len = lines.reduce((s, l) => s + l.t.length, 0);
-  const score = lines.reduce((s, l) => s + l.c * l.t.length, 0);
-  return { text: lines.map(l => l.t).join("\n"), score, avg: len ? score / len : 0, raw: !!(data.text || "").trim() };
+}
+// Ghép kết quả của nhiều thứ chữ: mỗi vùng chữ giữ cách đọc rõ nhất, xếp từ trên xuống
+function mergeLines(all) {
+  const overlap = (a, b) => {
+    const w = Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0), h = Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0);
+    if (w <= 0 || h <= 0) return false;
+    const area = (r) => (r.x1 - r.x0) * (r.y1 - r.y0);
+    return w * h > 0.4 * Math.min(area(a), area(b));
+  };
+  const kept = [];
+  for (const l of all.sort((x, y) => y.c - x.c)) if (!kept.some(k => overlap(k.b, l.b))) kept.push(l);
+  return kept.sort((x, y) => x.b.y0 - y.b.y0 || x.b.x0 - y.b.x0).map(l => l.t).join("\n");
 }
 $("photoBtn").onclick = () => { if (!busy) $("photoInput").click(); };
 $("photoInput").onchange = async (e) => {
@@ -739,7 +748,7 @@ $("photoInput").onchange = async (e) => {
   clearError();
   const turn = startTurn({ side: "guest", lang: other, src: "", dst: "", img: URL.createObjectURL(file), status: "Đang làm rõ ảnh…" });
   busy = true;
-  let best = null;
+  let text = "", raw = false;
   try {
     const canvas = await prepareImage(file);
     turn.status = "Đang tải bộ đọc chữ (lần đầu hơi lâu)…";
@@ -758,15 +767,16 @@ $("photoInput").onchange = async (e) => {
         updateStatus(turn);
       },
     });
+    const all = [];
     for (let i = 0; i < uniq.length; i++) {
       step = i;
       if (i > 0) await worker.reinitialize(uniq[i]);
       const { data } = await worker.recognize(canvas);
-      const r = scoreText(data);
-      if (!best || r.score > best.score) best = r;
-      if (best.avg >= 88 && best.text.length >= 4) break;
+      if ((data.text || "").trim()) raw = true;
+      all.push(...goodLines(data));
     }
     await worker.terminate();
+    text = mergeLines(all);
   } catch (err) {
     busy = false;
     turns.splice(turns.indexOf(turn), 1);
@@ -775,13 +785,13 @@ $("photoInput").onchange = async (e) => {
     return;
   }
   busy = false;
-  if (!best || best.text.length < 2) {
+  if (text.length < 2) {
     turns.splice(turns.indexOf(turn), 1);
     render();
-    showError(best && best.raw ? "ocrUnclear" : "ocrEmpty");
+    showError(raw ? "ocrUnclear" : "ocrEmpty");
     return;
   }
-  turn.src = best.text;
+  turn.src = text;
   turn.status = "Đang dịch…";
   render();
   if (!(await runTranslation(turn, "guest"))) { turn.status = "Chưa dịch được."; render(); }
