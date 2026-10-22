@@ -55,6 +55,7 @@ header { display: flex; align-items: center; gap: 8px; }
 }
 .lang-fixed { font-weight: 600; color: var(--vi); text-align: center; padding: 10px 4px; }
 .swap-label { color: var(--muted); font-size: 1.2rem; }
+.lang-hint { font-size: 0.8rem; color: var(--muted); text-align: center; line-height: 1.4; margin-top: -4px; }
 select#otherLang {
   width: 100%; font: inherit; font-weight: 600; color: var(--guest); background: var(--guest-soft);
   border: 0; border-radius: 10px; padding: 10px 8px; text-align: center;
@@ -136,6 +137,7 @@ button:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3p
     <div class="swap-label" aria-hidden="true">⇄</div>
     <select id="otherLang" aria-label="Ngôn ngữ của khách"></select>
   </div>
+  <div class="lang-hint">Chọn tiếng của khách ở ô bên phải. Nút đỏ: tiếng Việt → tiếng đó. Nút xanh: tiếng đó → tiếng Việt.</div>
 
   <div class="notice" id="notice" hidden>
     <div><b id="noticeTitle"></b><span id="noticeFix"></span></div>
@@ -197,6 +199,40 @@ const LANGS = [
   { code: "hi-IN", tr: "hi", vi: "Tiếng Hindi", name: "हिन्दी", speak: "बोलें" },
   { code: "ar-SA", tr: "ar", vi: "Tiếng Ả Rập", name: "العربية", speak: "تحدث" },
   { code: "zh-TW", tr: "zh-TW", vi: "Tiếng Trung (phồn thể)", name: "繁體中文", speak: "請說" },
+  { more: true, code: "zh-HK", tr: "yue", vi: "Tiếng Quảng Đông", name: "粵語", speak: "講嘢" },
+  { more: true, code: "my-MM", tr: "my", vi: "Tiếng Myanmar", name: "မြန်မာ" },
+  { more: true, code: "bn-BD", tr: "bn", vi: "Tiếng Bengal", name: "বাংলা" },
+  { more: true, code: "ur-PK", tr: "ur", vi: "Tiếng Urdu", name: "اردو" },
+  { more: true, code: "ta-IN", tr: "ta", vi: "Tiếng Tamil", name: "தமிழ்" },
+  { more: true, code: "te-IN", tr: "te", vi: "Tiếng Telugu", name: "తెలుగు" },
+  { more: true, code: "pa-IN", tr: "pa", vi: "Tiếng Punjab", name: "ਪੰਜਾਬੀ" },
+  { more: true, code: "si-LK", tr: "si", vi: "Tiếng Sinhala", name: "සිංහල" },
+  { more: true, code: "ne-NP", tr: "ne", vi: "Tiếng Nepal", name: "नेपाली" },
+  { more: true, code: "mn-MN", tr: "mn", vi: "Tiếng Mông Cổ", name: "Монгол" },
+  { more: true, code: "kk-KZ", tr: "kk", vi: "Tiếng Kazakh", name: "Қазақ" },
+  { more: true, code: "uz-UZ", tr: "uz", vi: "Tiếng Uzbek", name: "Oʻzbek" },
+  { more: true, code: "tr-TR", tr: "tr", vi: "Tiếng Thổ Nhĩ Kỳ", name: "Türkçe", speak: "Konuş" },
+  { more: true, code: "fa-IR", tr: "fa", vi: "Tiếng Ba Tư", name: "فارسی" },
+  { more: true, code: "he-IL", tr: "iw", vi: "Tiếng Do Thái", name: "עברית" },
+  { more: true, code: "az-AZ", tr: "az", vi: "Tiếng Azerbaijan", name: "Azərbaycan" },
+  { more: true, code: "ka-GE", tr: "ka", vi: "Tiếng Gruzia", name: "ქართული" },
+  { more: true, code: "hy-AM", tr: "hy", vi: "Tiếng Armenia", name: "Հայերեն" },
+  { more: true, code: "nl-NL", tr: "nl", vi: "Tiếng Hà Lan", name: "Nederlands", speak: "Spreken" },
+  { more: true, code: "pl-PL", tr: "pl", vi: "Tiếng Ba Lan", name: "Polski", speak: "Mów" },
+  { more: true, code: "uk-UA", tr: "uk", vi: "Tiếng Ukraina", name: "Українська", speak: "Говоріть" },
+  { more: true, code: "cs-CZ", tr: "cs", vi: "Tiếng Séc", name: "Čeština", speak: "Mluvit" },
+  { more: true, code: "sk-SK", tr: "sk", vi: "Tiếng Slovakia", name: "Slovenčina" },
+  { more: true, code: "hu-HU", tr: "hu", vi: "Tiếng Hungary", name: "Magyar" },
+  { more: true, code: "ro-RO", tr: "ro", vi: "Tiếng Romania", name: "Română" },
+  { more: true, code: "bg-BG", tr: "bg", vi: "Tiếng Bulgaria", name: "Български" },
+  { more: true, code: "sr-RS", tr: "sr", vi: "Tiếng Serbia", name: "Српски" },
+  { more: true, code: "hr-HR", tr: "hr", vi: "Tiếng Croatia", name: "Hrvatski" },
+  { more: true, code: "el-GR", tr: "el", vi: "Tiếng Hy Lạp", name: "Ελληνικά" },
+  { more: true, code: "sv-SE", tr: "sv", vi: "Tiếng Thuỵ Điển", name: "Svenska", speak: "Tala" },
+  { more: true, code: "nb-NO", tr: "no", vi: "Tiếng Na Uy", name: "Norsk", speak: "Snakk" },
+  { more: true, code: "da-DK", tr: "da", vi: "Tiếng Đan Mạch", name: "Dansk", speak: "Tal" },
+  { more: true, code: "fi-FI", tr: "fi", vi: "Tiếng Phần Lan", name: "Suomi", speak: "Puhu" },
+  { more: true, code: "sw-KE", tr: "sw", vi: "Tiếng Swahili", name: "Kiswahili" },
 ];
 const VI = { code: "vi-VN", tr: "vi", vi: "Tiếng Việt", name: "Tiếng Việt" };
 
@@ -243,16 +279,22 @@ $("noticeClose").onclick = clearError;
 // ---------- Ngôn ngữ ----------
 function fillLangs() {
   const sel = $("otherLang");
-  for (const l of LANGS) {
-    const o = document.createElement("option");
-    o.value = l.code; o.textContent = l.vi + " · " + l.name;
-    sel.append(o);
+  const groups = [["Hay dùng", LANGS.filter(l => !l.more)], ["Các tiếng khác", LANGS.filter(l => l.more)]];
+  for (const [label, list] of groups) {
+    const g = document.createElement("optgroup");
+    g.label = label;
+    for (const l of list) {
+      const o = document.createElement("option");
+      o.value = l.code; o.textContent = l.vi + " · " + l.name;
+      g.append(o);
+    }
+    sel.append(g);
   }
   sel.value = other.code;
 }
 function applyLang() {
   $("meTarget").textContent = other.vi.replace("Tiếng ", "");
-  $("guestLabel").textContent = other.speak;
+  $("guestLabel").textContent = other.speak || other.name;
   $("guestSrc").textContent = other.name;
 }
 $("otherLang").onchange = (e) => {
