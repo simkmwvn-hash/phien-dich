@@ -182,7 +182,7 @@ button:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3p
 <script>
 // code: mã giọng nói/đọc; tr: mã dùng cho dịch
 const LANGS = [
-  { code: "en-US", tr: "en", vi: "Tiếng Anh", name: "English", speak: "Speak" },
+  { code: "en-GB", tr: "en", vi: "Tiếng Anh (Anh)", name: "English UK", speak: "Speak" },
   { code: "zh-CN", tr: "zh-CN", vi: "Tiếng Trung", name: "中文", speak: "请说" },
   { code: "ja-JP", tr: "ja", vi: "Tiếng Nhật", name: "日本語", speak: "話す" },
   { code: "ko-KR", tr: "ko", vi: "Tiếng Hàn", name: "한국어", speak: "말하기" },
@@ -201,6 +201,7 @@ const LANGS = [
   { code: "hi-IN", tr: "hi", vi: "Tiếng Hindi", name: "हिन्दी", speak: "बोलें" },
   { code: "ar-SA", tr: "ar", vi: "Tiếng Ả Rập", name: "العربية", speak: "تحدث" },
   { code: "zh-TW", tr: "zh-TW", vi: "Tiếng Trung (phồn thể)", name: "繁體中文", speak: "請說" },
+  { more: true, code: "en-US", tr: "en", vi: "Tiếng Anh (Mỹ)", name: "English US", speak: "Speak" },
   { more: true, code: "zh-HK", tr: "yue", vi: "Tiếng Quảng Đông", name: "粵語", speak: "講嘢" },
   { more: true, code: "my-MM", tr: "my", vi: "Tiếng Myanmar", name: "မြန်မာ" },
   { more: true, code: "bn-BD", tr: "bn", vi: "Tiếng Bengal", name: "বাংলা" },
@@ -244,7 +245,7 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, v); } catch {} },
 };
 
-let other = LANGS.find(l => l.code === store.get("pd-lang", "en-US")) || LANGS[0];
+let other = LANGS.find(l => l.code === store.get("pd-lang2", "en-GB")) || LANGS[0];
 let autoSpeak = store.get("pd-auto", "1") === "1";
 let side = null;
 let micBlocked = false;
@@ -307,7 +308,7 @@ function applyLang() {
 }
 $("otherLang").onchange = (e) => {
   other = LANGS.find(l => l.code === e.target.value) || LANGS[0];
-  store.set("pd-lang", other.code);
+  store.set("pd-lang2", other.code);
   applyLang();
 };
 $("swapBtn").onclick = () => { swapped = !swapped; store.set("pd-swap", swapped ? "1" : "0"); applyLang(); };
@@ -371,21 +372,43 @@ $("showSpeak").onclick = () => lastShown && speak(lastShown.text, lastShown.lang
 let voices = [];
 function loadVoices() { try { voices = speechSynthesis.getVoices() || []; } catch { voices = []; } }
 if ("speechSynthesis" in window) { loadVoices(); speechSynthesis.onvoiceschanged = loadVoices; }
+// Chấm điểm giọng đọc: đúng vùng (vd. Anh-Anh) trước, rồi ưu tiên giọng chất lượng cao
 function pickVoice(code) {
-  const norm = (s) => s.toLowerCase().replace("_", "-");
-  const base = code.split("-")[0].toLowerCase();
-  return voices.find(v => v.lang && norm(v.lang) === code.toLowerCase())
-      || voices.find(v => v.lang && norm(v.lang).startsWith(base));
+  const norm = (s) => (s || "").toLowerCase().replace("_", "-");
+  const want = code.toLowerCase(), base = want.split("-")[0];
+  let best = null, bestScore = 0;
+  for (const v of voices) {
+    const l = norm(v.lang);
+    let s = l === want ? 10 : l.startsWith(base) ? 4 : 0;
+    if (!s) continue;
+    const n = (v.name || "").toLowerCase();
+    if (/natural|neural|online/.test(n)) s += 4;
+    if (/google/.test(n)) s += 3;
+    if (/enhanced|premium/.test(n)) s += 3;
+    if (!v.localService) s += 1;
+    if (s > bestScore) { best = v; bestScore = s; }
+  }
+  return best;
 }
-function speak(text, lang) {
+// Danh sách giọng đọc có thể chưa tải xong: chờ tối đa 1,2 giây
+function waitVoices() {
+  if (voices.length) return Promise.resolve();
+  return new Promise(res => {
+    const t = setTimeout(res, 1200);
+    try { speechSynthesis.addEventListener("voiceschanged", () => { clearTimeout(t); loadVoices(); res(); }, { once: true }); } catch { res(); }
+  });
+}
+async function speak(text, lang) {
   if (!("speechSynthesis" in window)) { showVoiceMissing(lang); return; }
   try {
     speechSynthesis.cancel();
+    loadVoices();
+    await waitVoices();
     const u = new SpeechSynthesisUtterance(text);
     u.lang = lang.code;
     const v = pickVoice(lang.code);
     if (v) u.voice = v; else if (voices.length) showVoiceMissing(lang);
-    u.rate = 0.95;
+    u.rate = 0.9;
     speechSynthesis.speak(u);
   } catch { showVoiceMissing(lang); }
 }
